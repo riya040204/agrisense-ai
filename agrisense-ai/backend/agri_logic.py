@@ -31,11 +31,19 @@ class AdvisoryReport:
 
 
 # -----------------------------
-# Placeholder ideal ranges — SOURCE THESE FROM ICAR/KVK BEFORE THE DEMO
+# Real ICAR reference values — Indian Institute of Soil Science (IISS), Bhopal.
+# General fertilizer recommendation for the Soybean-Wheat cropping system in
+# MP's Malwa/Vindhyan plateau: Soybean 20:60:20 kg NPK/ha, Wheat 120:60:40 kg NPK/ha.
+# Source: https://iiss.icar.gov.in/r%20and%20d.html
+#
+# NOTE: These are FERTILIZER APPLICATION doses, not directly "ideal soil test
+# ranges" — a true soil-test-based recommendation needs a target-yield equation
+# (ask your faculty mentor about STCR - Soil Test Crop Response). For this MVP,
+# we treat values well below the recommended dose as "deficient" and flag them.
 # -----------------------------
 IDEAL_NPK = {
-    "soybean": {"nitrogen": (20, 40), "phosphorus": (15, 30), "potassium": (15, 30)},
-    "wheat":   {"nitrogen": (40, 70), "phosphorus": (20, 40), "potassium": (20, 40)},
+    "soybean": {"nitrogen": (15, 25), "phosphorus": (45, 65), "potassium": (15, 25)},
+    "wheat":   {"nitrogen": (90, 130), "phosphorus": (45, 65), "potassium": (30, 45)},
 }
 
 MOISTURE_STRESS_THRESHOLD = {
@@ -80,16 +88,24 @@ def evaluate_nutrients(crop: str, nitrogen: float, phosphorus: float, potassium:
 
 def evaluate_pest_risk(crop: str, temperature: float, humidity: float) -> Advisory:
     """
-    Simple placeholder rules. Replace with real thresholds for known MP pests:
-    - Soybean: Girdle beetle, Yellow Mosaic Virus (favoured by high humidity + warm temps)
-    - Wheat: Rust (favoured by high humidity + moderate temps)
+    Real, sourced thresholds:
+    - Soybean / Yellow Mosaic Virus: spreads via whitefly in warm, humid weather.
+      Protection: seed treatment with Imidacloprid 70% WG @ 5g/kg seed before sowing.
+      (Source: agricultural extension guidance for MP soybean growers)
+    - Wheat / Leaf Rust: most severe with max temp 17.8-30°C and humidity 76-85%.
+      Control: fungicides such as Propiconazole 25% EC or Tebuconazole-based products.
+      (Source: peer-reviewed wheat leaf rust epidemiology study, PMC11215259)
     """
-    if crop == "soybean" and temperature > 28 and humidity > 70:
+    if crop == "soybean" and temperature > 25 and humidity > 70:
         return Advisory("pest", "red",
-            "Conditions favor Yellow Mosaic Virus / Girdle beetle risk. Inspect crop and consult local KVK.")
-    if crop == "wheat" and 15 <= temperature <= 25 and humidity > 75:
+            "Warm + humid conditions favor Yellow Mosaic Virus (whitefly-transmitted). "
+            "If not already seed-treated, consult local KVK about Imidacloprid 70% WG seed treatment "
+            "and monitor for whitefly activity.")
+    if crop == "wheat" and 18 <= temperature <= 30 and humidity >= 76:
         return Advisory("pest", "amber",
-            "Conditions favor Rust risk. Monitor leaves closely over the coming week.")
+            "Temperature and humidity are in the range favorable for wheat leaf rust. "
+            "Inspect leaves for orange-brown pustules; if found, consider a Propiconazole or "
+            "Tebuconazole-based fungicide per label dose.")
     return Advisory("pest", "green", "No elevated pest/disease risk detected from current conditions.")
 
 
