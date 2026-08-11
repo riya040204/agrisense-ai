@@ -1,6 +1,7 @@
 """
 AgriSense AI - Backend
 Week 2: Sensor-ingestion endpoint (manual entry for now, faculty-provided values)
+Week 3: Every reading now automatically gets a real advisory attached.
 
 Run with: uvicorn main:app --reload
 Then open: http://localhost:8000/docs
@@ -11,6 +12,8 @@ from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
 from sqlmodel import SQLModel, Field, create_engine, Session, select
+
+from agri_logic import generate_advisory
 
 # -----------------------------
 # 1. Database setup (SQLite - zero config, just a local file)
@@ -52,6 +55,19 @@ class ReadingCreate(SQLModel):
     crop: str
 
 
+# One advisory line (irrigation / nutrient / pest), matching agri_logic.Advisory
+class AdvisoryOut(SQLModel):
+    category: str
+    severity: str   # "green" | "amber" | "red"
+    message: str
+
+
+# What we return after saving a reading: the reading itself + its advisories
+class ReadingWithAdvisory(SQLModel):
+    reading: Reading
+    advisories: List[AdvisoryOut]
+
+
 # -----------------------------
 # 3. Create the database file + table on startup
 # -----------------------------
@@ -71,19 +87,35 @@ def on_startup():
 # 4. Endpoints
 # -----------------------------
 
-@app.post("/api/v1/readings", response_model=Reading)
+@app.post("/api/v1/readings", response_model=ReadingWithAdvisory)
 def create_reading(payload: ReadingCreate):
     """
-    Accepts one sensor reading (or manually-typed faculty value) and saves it.
-    FastAPI + Pydantic automatically reject bad data (wrong type, missing field)
-    before this code even runs. id and timestamp are always set by the server.
+    Accepts one sensor reading (or manually-typed faculty value), saves it,
+    and runs it through the agri-logic engine to return real advice immediately.
+    id and timestamp are always set by the server.
     """
     reading = Reading(**payload.dict())
     with Session(engine) as session:
         session.add(reading)
         session.commit()
         session.refresh(reading)
-        return reading
+
+    report = generate_advisory(
+        soil_type=reading.soil_type,
+        nitrogen=reading.nitrogen,
+        phosphorus=reading.phosphorus,
+        potassium=reading.potassium,
+        soil_moisture=reading.soil_moisture,
+        temperature=reading.temperature,
+        humidity=reading.humidity,
+        district=reading.district,
+        crop=reading.crop,
+    )
+    advisories = [
+        AdvisoryOut(category=a.category, severity=a.severity, message=a.message)
+        for a in report.advisories
+    ]
+    return ReadingWithAdvisory(reading=reading, advisories=advisories)
 
 
 @app.get("/api/v1/readings/latest", response_model=Optional[Reading])
