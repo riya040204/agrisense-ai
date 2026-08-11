@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 
 from agri_logic import generate_advisory
@@ -77,6 +78,16 @@ def create_db_and_tables():
 
 app = FastAPI(title="AgriSense AI Backend")
 
+# Allow the Flutter web app (running on a different local port) to call this API.
+# For the hackathon/demo we allow all origins; tighten this before any real deployment.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("startup")
 def on_startup():
@@ -126,6 +137,37 @@ def get_latest_reading():
         if not result:
             raise HTTPException(status_code=404, detail="No readings yet")
         return result
+
+
+@app.get("/api/v1/advisory/latest", response_model=ReadingWithAdvisory)
+def get_latest_advisory():
+    """
+    Returns the most recent reading together with its advisories,
+    WITHOUT creating a new database entry (read-only, safe to call anytime
+    the dashboard loads or refreshes).
+    """
+    with Session(engine) as session:
+        statement = select(Reading).order_by(Reading.timestamp.desc())
+        reading = session.exec(statement).first()
+        if not reading:
+            raise HTTPException(status_code=404, detail="No readings yet")
+
+    report = generate_advisory(
+        soil_type=reading.soil_type,
+        nitrogen=reading.nitrogen,
+        phosphorus=reading.phosphorus,
+        potassium=reading.potassium,
+        soil_moisture=reading.soil_moisture,
+        temperature=reading.temperature,
+        humidity=reading.humidity,
+        district=reading.district,
+        crop=reading.crop,
+    )
+    advisories = [
+        AdvisoryOut(category=a.category, severity=a.severity, message=a.message)
+        for a in report.advisories
+    ]
+    return ReadingWithAdvisory(reading=reading, advisories=advisories)
 
 
 @app.get("/api/v1/readings/history", response_model=List[Reading])
