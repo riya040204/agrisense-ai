@@ -1,9 +1,14 @@
 // AgriSense AI - Mobile App
-// Week 4-5: Dashboard connected to the live backend.
+// Redesigned dashboard: moss/ochre palette, Fraunces + Inter + JetBrains Mono,
+// circular moisture gauge as the signature element.
 
 import 'package:flutter/material.dart';
 import 'models.dart';
 import 'api_service.dart';
+import 'theme.dart';
+import 'moisture_gauge.dart';
+import 'add_reading_screen.dart';
+import 'history_screen.dart';
 
 void main() {
   runApp(const AgriSenseApp());
@@ -17,14 +22,72 @@ class AgriSenseApp extends StatelessWidget {
     return MaterialApp(
       title: 'AgriSense AI',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF2E7D32), // agricultural green
-        useMaterial3: true,
-      ),
-      home: const DashboardScreen(),
+      theme: AppTheme.theme,
+      home: const RootShell(),
     );
   }
 }
+
+// Hosts the 3 tabs (Dashboard / Add Reading / History) with an animated
+// crossfade + slight rise between them, instead of an abrupt swap.
+class RootShell extends StatefulWidget {
+  const RootShell({super.key});
+
+  @override
+  State<RootShell> createState() => _RootShellState();
+}
+
+class _RootShellState extends State<RootShell> {
+  int _index = 0;
+  // Bumping this forces the Dashboard to reload its data — used after saving
+  // a new reading so the dashboard doesn't show stale data.
+  int _dashboardRefreshKey = 0;
+
+  void _goToDashboard() {
+    setState(() {
+      _index = 0;
+      _dashboardRefreshKey++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screens = [
+      DashboardScreen(key: ValueKey(_dashboardRefreshKey)),
+      AddReadingScreen(onSaved: _goToDashboard),
+      const HistoryScreen(),
+    ];
+
+    return Scaffold(
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 320),
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(begin: const Offset(0, 0.02), end: Offset.zero).animate(animation),
+            child: child,
+          ),
+        ),
+        child: KeyedSubtree(key: ValueKey(_index), child: screens[_index]),
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (i) => setState(() => _index = i),
+        backgroundColor: AppColors.surface,
+        indicatorColor: AppColors.moss.withValues(alpha: 0.12),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
+          NavigationDestination(icon: Icon(Icons.add_circle_outline_rounded), selectedIcon: Icon(Icons.add_circle_rounded), label: 'Add Reading'),
+          NavigationDestination(icon: Icon(Icons.history_rounded), selectedIcon: Icon(Icons.history_rounded), label: 'History'),
+        ],
+      ),
+    );
+  }
+}
+
+// Moisture stress thresholds, matching agri_logic.py, used only to draw the
+// gauge's marker line — the real evaluation always happens on the backend.
+const Map<String, double> _moistureThreshold = {'soybean': 25, 'wheat': 30};
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -70,13 +133,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: const Text('AgriSense AI'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded),
             onPressed: _loadData,
             tooltip: 'Refresh',
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: RefreshIndicator(
+        color: AppColors.moss,
         onRefresh: _loadData,
         child: _buildBody(),
       ),
@@ -85,165 +150,235 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: CircularProgressIndicator(color: AppColors.moss));
     }
 
     if (_error != null) {
-      return ListView(
-        children: [
-          const SizedBox(height: 100),
-          Icon(Icons.cloud_off, size: 64, color: Colors.grey[400]),
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              'Could not reach the backend.\n\n'
-              'Make sure `uvicorn main:app --reload` is running in your backend '
-              'folder, then pull down to retry.\n\nDetails: $_error',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[600]),
-            ),
-          ),
-        ],
+      return _EmptyState(
+        icon: Icons.cloud_off_rounded,
+        title: 'Can\'t reach the backend',
+        message:
+            'Start it with `uvicorn main:app --reload` in your backend folder, '
+            'then pull down to retry.\n\n$_error',
       );
     }
 
     if (_data == null) {
-      return ListView(
-        children: [
-          const SizedBox(height: 100),
-          Icon(Icons.eco_outlined, size: 64, color: Colors.grey[400]),
-          const SizedBox(height: 16),
-          const Center(
-            child: Text(
-              'No readings yet.\nSubmit one via the backend\'s /docs page to see it here.',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ],
+      return const _EmptyState(
+        icon: Icons.eco_outlined,
+        title: 'No readings yet',
+        message: 'Submit one via the backend\'s /docs page to see it here.',
       );
     }
 
     final reading = _data!.reading;
     final advisories = _data!.advisories;
+    final threshold = _moistureThreshold[reading.crop] ?? 25;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _buildHeaderCard(reading),
-        const SizedBox(height: 16),
-        _buildSensorGrid(reading),
-        const SizedBox(height: 24),
-        Text('Advisories', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
-        ...advisories.map((a) => _buildAdvisoryCard(a)),
-      ],
-    );
-  }
-
-  Widget _buildHeaderCard(Reading reading) {
-    return Card(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: Padding(
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeOut,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(offset: Offset(0, (1 - value) * 12), child: child),
+      ),
+      child: ListView(
         padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            const Icon(Icons.agriculture, size: 40),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${_capitalize(reading.crop)} • ${reading.district}',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  Text(
-                    'Soil: ${_capitalize(reading.soilType.replaceAll('_', ' '))}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  Text(
-                    'Updated: ${reading.timestamp.split('.')[0].replaceAll('T', ' ')}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        children: [
+          _HeaderCard(reading: reading, threshold: threshold),
+          const SizedBox(height: 20),
+          Text('Sensor readings', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 10),
+          _SensorGrid(reading: reading),
+          const SizedBox(height: 24),
+          Text('Advisories', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 10),
+          ...advisories.map((a) => _AdvisoryCard(advisory: a)),
+        ],
       ),
     );
   }
+}
 
-  Widget _buildSensorGrid(Reading reading) {
-    final items = [
-      ('Nitrogen (N)', '${reading.nitrogen} kg/ha', Icons.science_outlined),
-      ('Phosphorus (P)', '${reading.phosphorus} kg/ha', Icons.science_outlined),
-      ('Potassium (K)', '${reading.potassium} kg/ha', Icons.science_outlined),
-      ('Soil Moisture', '${reading.soilMoisture}%', Icons.water_drop_outlined),
-      ('Temperature', '${reading.temperature}°C', Icons.thermostat_outlined),
-      ('Humidity', '${reading.humidity}%', Icons.cloud_outlined),
-    ];
+class _HeaderCard extends StatelessWidget {
+  final Reading reading;
+  final double threshold;
 
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 2.2,
-      crossAxisSpacing: 10,
-      mainAxisSpacing: 10,
-      children: items.map((item) {
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
+  const _HeaderCard({required this.reading, required this.threshold});
+
+  String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.moss,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(item.$3, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(item.$1, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                      Text(item.$2, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    ],
-                  ),
+                Text(
+                  _capitalize(reading.crop),
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${reading.district} · ${_capitalize(reading.soilType.replaceAll('_', ' '))} soil',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Icon(Icons.schedule_rounded, size: 14, color: Colors.white.withValues(alpha: 0.7)),
+                    const SizedBox(width: 6),
+                    Text(
+                      reading.timestamp.split('.')[0].replaceAll('T', '  '),
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
+                    ),
+                  ],
                 ),
               ],
             ),
+          ),
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(70)),
+            child: MoistureGauge(moisturePercent: reading.soilMoisture, threshold: threshold),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SensorGrid extends StatelessWidget {
+  final Reading reading;
+  const _SensorGrid({required this.reading});
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [
+      ('N', reading.nitrogen, 'kg/ha'),
+      ('P', reading.phosphorus, 'kg/ha'),
+      ('K', reading.potassium, 'kg/ha'),
+      ('Temp', reading.temperature, '°C'),
+      ('Humidity', reading.humidity, '%'),
+    ];
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: items.map((item) {
+        return Container(
+          width: (MediaQuery.of(context).size.width - 16 * 2 - 10 * 2) / 3,
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.moss.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(item.$1, style: TextStyle(fontSize: 11, color: AppColors.inkMuted, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(item.$2.toStringAsFixed(item.$2 % 1 == 0 ? 0 : 1), style: AppTheme.mono(size: 17)),
+                  const SizedBox(width: 3),
+                  Text(item.$3, style: TextStyle(fontSize: 10, color: AppColors.inkMuted)),
+                ],
+              ),
+            ],
           ),
         );
       }).toList(),
     );
   }
+}
 
-  Widget _buildAdvisoryCard(Advisory advisory) {
-    final Color color = switch (advisory.severity) {
-      'red' => Colors.red,
-      'amber' => Colors.orange,
-      _ => Colors.green,
-    };
-    final IconData icon = switch (advisory.category) {
-      'irrigation' => Icons.water_drop,
-      'nutrient' => Icons.eco,
-      'pest' => Icons.bug_report,
-      _ => Icons.info,
-    };
+class _AdvisoryCard extends StatelessWidget {
+  final Advisory advisory;
+  const _AdvisoryCard({required this.advisory});
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Icon(icon, color: color),
-        title: Text(
-          _capitalize(advisory.category),
-          style: TextStyle(fontWeight: FontWeight.bold, color: color),
-        ),
-        subtitle: Text(advisory.message),
+  String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  IconData get _icon => switch (advisory.category) {
+        'irrigation' => Icons.water_drop_rounded,
+        'nutrient' => Icons.eco_rounded,
+        'pest' => Icons.bug_report_rounded,
+        _ => Icons.info_rounded,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final color = AppTheme.severityColor(advisory.severity);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border(left: BorderSide(color: color, width: 4)),
+        boxShadow: [
+          BoxShadow(color: AppColors.ink.withValues(alpha: 0.03), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: color.withValues(alpha: 0.12), shape: BoxShape.circle),
+            child: Icon(_icon, size: 18, color: color),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_capitalize(advisory.category), style: TextStyle(fontWeight: FontWeight.w700, color: color, fontSize: 13)),
+                const SizedBox(height: 3),
+                Text(advisory.message, style: Theme.of(context).textTheme.bodyMedium),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
+}
 
-  String _capitalize(String s) =>
-      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+class _EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String message;
+
+  const _EmptyState({required this.icon, required this.title, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      children: [
+        const SizedBox(height: 120),
+        Icon(icon, size: 56, color: AppColors.moss.withValues(alpha: 0.4)),
+        const SizedBox(height: 16),
+        Text(title, textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Text(message, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
+    );
+  }
 }

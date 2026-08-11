@@ -10,11 +10,12 @@ Then open: http://localhost:8000/docs
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 
 from agri_logic import generate_advisory
+from diagnosis import diagnose_image
 
 # -----------------------------
 # 1. Database setup (SQLite - zero config, just a local file)
@@ -183,6 +184,44 @@ def get_reading_history(district: Optional[str] = None, crop: Optional[str] = No
             statement = statement.where(Reading.crop == crop)
         statement = statement.order_by(Reading.timestamp.desc())
         return session.exec(statement).all()
+
+
+class DiagnosisOut(SQLModel):
+    healthy: bool
+    crop: Optional[str]
+    condition: str
+    confidence: float
+    advice: str
+
+
+@app.post("/api/v1/diagnose", response_model=DiagnosisOut)
+async def diagnose(file: UploadFile = File(...)):
+    """
+    Accepts a leaf photo and returns healthy/diseased status using a
+    pretrained model (see diagnosis.py). No data is saved to the database —
+    this is a stateless check.
+    """
+    image_bytes = await file.read()
+    try:
+        result = await diagnose_image(image_bytes)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    if result.healthy:
+        advice = "No signs of disease detected. Continue routine monitoring."
+    else:
+        advice = (
+            f"Possible {result.condition} detected. This is an automated first check, not a lab "
+            "diagnosis — confirm with your local Krishi Vigyan Kendra (KVK) before applying any treatment."
+        )
+
+    return DiagnosisOut(
+        healthy=result.healthy,
+        crop=result.crop,
+        condition=result.condition,
+        confidence=result.confidence,
+        advice=advice,
+    )
 
 
 @app.get("/")

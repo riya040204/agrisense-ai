@@ -68,16 +68,29 @@ def evaluate_irrigation(crop: str, soil_moisture: float) -> Advisory:
 def evaluate_nutrients(crop: str, nitrogen: float, phosphorus: float, potassium: float) -> List[Advisory]:
     results = []
     ranges = IDEAL_NPK.get(crop, IDEAL_NPK["soybean"])
-    labels = {"nitrogen": ("N", "Urea"), "phosphorus": ("P", "DAP"), "potassium": ("K", "MOP")}
+    # (short name, fertilizer name, real MRP per 50kg bag, % nutrient content used to
+    # estimate bags needed). Prices: Govt of India, June 2026 (Urea MRP notified;
+    # DAP Rabi 2025-26 rate; MOP approx NBS-linked retail).
+    labels = {
+        "nitrogen": ("N", "Urea", 242, 45, 0.46),      # ₹242/45kg bag, 46% N
+        "phosphorus": ("P", "DAP", 1350, 50, 0.46),     # ₹1350/50kg bag, ~46% P2O5
+        "potassium": ("K", "MOP", 1710, 50, 0.60),      # ₹1710/50kg bag, ~60% K2O
+    }
     values = {"nitrogen": nitrogen, "phosphorus": phosphorus, "potassium": potassium}
 
     for nutrient, (low, high) in ranges.items():
         value = values[nutrient]
-        short, fertilizer = labels[nutrient]
+        short, fertilizer, price, bag_kg, content_pct = labels[nutrient]
         if value < low:
-            deficit = round(low - value, 1)
+            deficit_kg_per_ha = round(low - value, 1)
+            # Rough estimate: kg of fertilizer needed = nutrient deficit / nutrient content %
+            fertilizer_kg = deficit_kg_per_ha / content_pct
+            bags_needed = max(1, round(fertilizer_kg / bag_kg))
+            cost = bags_needed * price
             results.append(Advisory("nutrient", "red",
-                f"{short} deficient ({value}, ideal {low}-{high}). Apply {fertilizer} to correct ~{deficit} kg/ha shortfall."))
+                f"{short} deficient ({value}, ideal {low}-{high}). Apply {fertilizer} to correct "
+                f"~{deficit_kg_per_ha} kg/ha shortfall — approx. {bags_needed} bag(s) "
+                f"({bag_kg}kg) at ₹{price}/bag ≈ ₹{cost} per hectare (MRP, June 2026)."))
         elif value > high:
             results.append(Advisory("nutrient", "amber",
                 f"{short} above ideal range ({value}, ideal {low}-{high}). Avoid further {fertilizer} application."))
