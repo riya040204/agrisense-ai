@@ -2,6 +2,7 @@
 // Handles all HTTP calls to the FastAPI backend.
 
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'models.dart';
 
@@ -45,6 +46,7 @@ class ApiService {
   }
 
   static Future<ReadingWithAdvisory> submitReading({
+
     required String soilType,
     required double nitrogen,
     required double phosphorus,
@@ -82,5 +84,18 @@ class ApiService {
   static Future<List<Advisory>> fetchAdvisoriesForLatest() async {
     final result = await fetchLatestWithAdvisory();
     return result?.advisories ?? [];
+  }
+
+  static Future<Diagnosis> diagnoseImage(Uint8List imageBytes, String filename) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/v1/diagnose'));
+    request.files.add(http.MultipartFile.fromBytes('file', imageBytes, filename: filename));
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+
+    if (response.statusCode == 200) {
+      return Diagnosis.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Diagnosis failed (${response.statusCode}): ${response.body}');
+    }
   }
 }

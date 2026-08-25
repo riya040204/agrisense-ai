@@ -61,6 +61,32 @@ class Reading {
   }
 }
 
+// What POST /api/v1/diagnose returns.
+class Diagnosis {
+  final bool healthy;
+  final String? crop;
+  final String condition;
+  final double confidence;
+  final String advice;
+
+  Diagnosis({
+    required this.healthy,
+    required this.crop,
+    required this.condition,
+    required this.confidence,
+    required this.advice,
+  });
+
+  factory Diagnosis.fromJson(Map<String, dynamic> json) {
+    return Diagnosis(
+      healthy: json['healthy'],
+      crop: json['crop'],
+      condition: json['condition'],
+      confidence: (json['confidence'] as num).toDouble(),
+      advice: json['advice'],
+    );
+  }
+}
 // What POST /api/v1/readings returns: the saved reading + its advisories together.
 class ReadingWithAdvisory {
   final Reading reading;

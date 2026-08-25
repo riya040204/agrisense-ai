@@ -1,6 +1,5 @@
 // AgriSense AI - Mobile App
-// Redesigned dashboard: moss/ochre palette, Fraunces + Inter + JetBrains Mono,
-// circular moisture gauge as the signature element.
+// 5 tabs: Dashboard, Add Reading, History, Journey, Diagnose.
 
 import 'package:flutter/material.dart';
 import 'models.dart';
@@ -9,6 +8,8 @@ import 'theme.dart';
 import 'moisture_gauge.dart';
 import 'add_reading_screen.dart';
 import 'history_screen.dart';
+import 'journey_screen.dart';
+import 'diagnose_screen.dart';
 
 void main() {
   runApp(const AgriSenseApp());
@@ -28,8 +29,8 @@ class AgriSenseApp extends StatelessWidget {
   }
 }
 
-// Hosts the 3 tabs (Dashboard / Add Reading / History) with an animated
-// crossfade + slight rise between them, instead of an abrupt swap.
+// Hosts the tabs with an animated crossfade + slight rise between them,
+// instead of an abrupt swap.
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
 
@@ -56,6 +57,8 @@ class _RootShellState extends State<RootShell> {
       DashboardScreen(key: ValueKey(_dashboardRefreshKey)),
       AddReadingScreen(onSaved: _goToDashboard),
       const HistoryScreen(),
+      const JourneyScreen(),
+      const DiagnoseScreen(),
     ];
 
     return Scaffold(
@@ -77,8 +80,10 @@ class _RootShellState extends State<RootShell> {
         indicatorColor: AppColors.moss.withValues(alpha: 0.12),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
-          NavigationDestination(icon: Icon(Icons.add_circle_outline_rounded), selectedIcon: Icon(Icons.add_circle_rounded), label: 'Add Reading'),
+          NavigationDestination(icon: Icon(Icons.add_circle_outline_rounded), selectedIcon: Icon(Icons.add_circle_rounded), label: 'Add'),
           NavigationDestination(icon: Icon(Icons.history_rounded), selectedIcon: Icon(Icons.history_rounded), label: 'History'),
+          NavigationDestination(icon: Icon(Icons.timeline_outlined), selectedIcon: Icon(Icons.timeline_rounded), label: 'Journey'),
+          NavigationDestination(icon: Icon(Icons.image_search_outlined), selectedIcon: Icon(Icons.image_search_rounded), label: 'Diagnose'),
         ],
       ),
     );
@@ -167,7 +172,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return const _EmptyState(
         icon: Icons.eco_outlined,
         title: 'No readings yet',
-        message: 'Submit one via the backend\'s /docs page to see it here.',
+        message: 'Add one from the "Add" tab to see it here.',
       );
     }
 

@@ -2,6 +2,7 @@
 AgriSense AI - Backend
 Week 2: Sensor-ingestion endpoint (manual entry for now, faculty-provided values)
 Week 3: Every reading now automatically gets a real advisory attached.
+Week 6: Photo-based leaf diagnosis via a pretrained model.
 
 Run with: uvicorn main:app --reload
 Then open: http://localhost:8000/docs
@@ -12,6 +13,7 @@ from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 
 from agri_logic import generate_advisory
@@ -25,26 +27,23 @@ engine = create_engine(DATABASE_URL, echo=False)
 
 
 # -----------------------------
-# 2. The data model — this IS your 8-parameter data contract, made real
+# 2. Data models
 # -----------------------------
 
-# The DATABASE table — includes id and timestamp, which the server controls.
 class Reading(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     soil_type: str
-    nitrogen: float          # kg/ha
-    phosphorus: float        # kg/ha
-    potassium: float         # kg/ha
-    soil_moisture: float     # %
-    temperature: float       # °C
-    humidity: float          # %
+    nitrogen: float
+    phosphorus: float
+    potassium: float
+    soil_moisture: float
+    temperature: float
+    humidity: float
     district: str
-    crop: str                # "soybean" or "wheat"
+    crop: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
-# What the CLIENT is allowed to send — no id, no timestamp.
-# The server always generates those itself, so a client can never overwrite them.
 class ReadingCreate(SQLModel):
     soil_type: str
     nitrogen: float
@@ -57,30 +56,31 @@ class ReadingCreate(SQLModel):
     crop: str
 
 
-# One advisory line (irrigation / nutrient / pest), matching agri_logic.Advisory
 class AdvisoryOut(SQLModel):
     category: str
-    severity: str   # "green" | "amber" | "red"
+    severity: str
     message: str
 
 
-# What we return after saving a reading: the reading itself + its advisories
 class ReadingWithAdvisory(SQLModel):
     reading: Reading
     advisories: List[AdvisoryOut]
 
 
-# -----------------------------
-# 3. Create the database file + table on startup
-# -----------------------------
+class DiagnosisOut(SQLModel):
+    healthy: bool
+    crop: Optional[str]
+    condition: str
+    confidence: float
+    advice: str
+
+
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
 
 
 app = FastAPI(title="AgriSense AI Backend")
 
-# Allow the Flutter web app (running on a different local port) to call this API.
-# For the hackathon/demo we allow all origins; tighten this before any real deployment.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -96,16 +96,11 @@ def on_startup():
 
 
 # -----------------------------
-# 4. Endpoints
+# 3. Endpoints
 # -----------------------------
 
 @app.post("/api/v1/readings", response_model=ReadingWithAdvisory)
 def create_reading(payload: ReadingCreate):
-    """
-    Accepts one sensor reading (or manually-typed faculty value), saves it,
-    and runs it through the agri-logic engine to return real advice immediately.
-    id and timestamp are always set by the server.
-    """
     reading = Reading(**payload.dict())
     with Session(engine) as session:
         session.add(reading)
@@ -123,30 +118,12 @@ def create_reading(payload: ReadingCreate):
         district=reading.district,
         crop=reading.crop,
     )
-    advisories = [
-        AdvisoryOut(category=a.category, severity=a.severity, message=a.message)
-        for a in report.advisories
-    ]
+    advisories = [AdvisoryOut(category=a.category, severity=a.severity, message=a.message) for a in report.advisories]
     return ReadingWithAdvisory(reading=reading, advisories=advisories)
-
-
-@app.get("/api/v1/readings/latest", response_model=Optional[Reading])
-def get_latest_reading():
-    with Session(engine) as session:
-        statement = select(Reading).order_by(Reading.timestamp.desc())
-        result = session.exec(statement).first()
-        if not result:
-            raise HTTPException(status_code=404, detail="No readings yet")
-        return result
 
 
 @app.get("/api/v1/advisory/latest", response_model=ReadingWithAdvisory)
 def get_latest_advisory():
-    """
-    Returns the most recent reading together with its advisories,
-    WITHOUT creating a new database entry (read-only, safe to call anytime
-    the dashboard loads or refreshes).
-    """
     with Session(engine) as session:
         statement = select(Reading).order_by(Reading.timestamp.desc())
         reading = session.exec(statement).first()
@@ -164,18 +141,12 @@ def get_latest_advisory():
         district=reading.district,
         crop=reading.crop,
     )
-    advisories = [
-        AdvisoryOut(category=a.category, severity=a.severity, message=a.message)
-        for a in report.advisories
-    ]
+    advisories = [AdvisoryOut(category=a.category, severity=a.severity, message=a.message) for a in report.advisories]
     return ReadingWithAdvisory(reading=reading, advisories=advisories)
 
 
 @app.get("/api/v1/readings/history", response_model=List[Reading])
 def get_reading_history(district: Optional[str] = None, crop: Optional[str] = None):
-    """
-    Returns all readings, optionally filtered by district and/or crop.
-    """
     with Session(engine) as session:
         statement = select(Reading)
         if district:
@@ -186,24 +157,17 @@ def get_reading_history(district: Optional[str] = None, crop: Optional[str] = No
         return session.exec(statement).all()
 
 
-class DiagnosisOut(SQLModel):
-    healthy: bool
-    crop: Optional[str]
-    condition: str
-    confidence: float
-    advice: str
-
-
 @app.post("/api/v1/diagnose", response_model=DiagnosisOut)
 async def diagnose(file: UploadFile = File(...)):
     """
-    Accepts a leaf photo and returns healthy/diseased status using a
-    pretrained model (see diagnosis.py). No data is saved to the database —
-    this is a stateless check.
+    Accepts a leaf photo and returns healthy/diseased status.
+    diagnose_image() is synchronous (see diagnosis.py for why), so we run it
+    in a thread pool here to avoid blocking the server while it waits on
+    Hugging Face's response.
     """
     image_bytes = await file.read()
     try:
-        result = await diagnose_image(image_bytes)
+        result = await run_in_threadpool(diagnose_image, image_bytes)
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
