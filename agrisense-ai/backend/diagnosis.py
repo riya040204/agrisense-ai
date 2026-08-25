@@ -42,7 +42,7 @@ def _parse_label(raw_label: str):
     return crop, condition, is_healthy
 
 
-def diagnose_image(image_bytes: bytes) -> DiagnosisResult:
+def diagnose_image(image_bytes: bytes, content_type: str = "image/jpeg") -> DiagnosisResult:
     """
     Synchronous on purpose — see module docstring. Called from the FastAPI
     route via run_in_threadpool so it doesn't block the server.
@@ -53,7 +53,12 @@ def diagnose_image(image_bytes: bytes) -> DiagnosisResult:
             "(see .env.example)."
         )
 
-    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    # Hugging Face requires a Content-Type telling it this is image data,
+    # not raw/unspecified bytes — without it, it rejects the request.
+    headers = {
+        "Authorization": f"Bearer {HF_API_TOKEN}",
+        "Content-Type": content_type or "image/jpeg",
+    }
 
     try:
         with httpx.Client(timeout=40.0) as client:

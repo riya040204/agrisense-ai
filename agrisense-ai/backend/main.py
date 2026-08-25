@@ -166,8 +166,9 @@ async def diagnose(file: UploadFile = File(...)):
     Hugging Face's response.
     """
     image_bytes = await file.read()
+    content_type = file.content_type or "image/jpeg"
     try:
-        result = await run_in_threadpool(diagnose_image, image_bytes)
+        result = await run_in_threadpool(diagnose_image, image_bytes, content_type)
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
