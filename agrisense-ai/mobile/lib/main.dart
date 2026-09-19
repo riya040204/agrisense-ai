@@ -4,12 +4,14 @@
 import 'package:flutter/material.dart';
 import 'models.dart';
 import 'api_service.dart';
+import 'auth_service.dart';
 import 'theme.dart';
 import 'moisture_gauge.dart';
 import 'add_reading_screen.dart';
 import 'history_screen.dart';
 import 'journey_screen.dart';
 import 'diagnose_screen.dart';
+import 'login_screen.dart';
 
 void main() {
   runApp(const AgriSenseApp());
@@ -24,15 +26,63 @@ class AgriSenseApp extends StatelessWidget {
       title: 'AgriSense AI',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,
-      home: const RootShell(),
+      home: const AuthGate(),
     );
+  }
+}
+
+// Decides whether to show the login screen or the main app, based on
+// whether a session token was saved from a previous launch.
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool _checking = true;
+  bool _loggedIn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSession();
+  }
+
+  Future<void> _checkSession() async {
+    final token = await AuthService.getStoredToken();
+    setState(() {
+      _loggedIn = token != null;
+      _checking = false;
+    });
+  }
+
+  void _handleLoggedIn() => setState(() => _loggedIn = true);
+
+  void _handleLogout() {
+    setState(() => _loggedIn = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checking) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: AppColors.moss)),
+      );
+    }
+    if (!_loggedIn) {
+      return LoginScreen(onLoggedIn: _handleLoggedIn);
+    }
+    return RootShell(onLogout: _handleLogout);
   }
 }
 
 // Hosts the tabs with an animated crossfade + slight rise between them,
 // instead of an abrupt swap.
 class RootShell extends StatefulWidget {
-  const RootShell({super.key});
+  final VoidCallback onLogout;
+  const RootShell({super.key, required this.onLogout});
 
   @override
   State<RootShell> createState() => _RootShellState();
@@ -54,7 +104,7 @@ class _RootShellState extends State<RootShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      DashboardScreen(key: ValueKey(_dashboardRefreshKey)),
+      DashboardScreen(key: ValueKey(_dashboardRefreshKey), onLogout: widget.onLogout),
       AddReadingScreen(onSaved: _goToDashboard),
       const HistoryScreen(),
       const JourneyScreen(),
@@ -95,7 +145,8 @@ class _RootShellState extends State<RootShell> {
 const Map<String, double> _moistureThreshold = {'soybean': 25, 'wheat': 30};
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+  final VoidCallback onLogout;
+  const DashboardScreen({super.key, required this.onLogout});
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -105,11 +156,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ReadingWithAdvisory? _data;
   bool _loading = true;
   String? _error;
+  AppUser? _user;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _loadUser();
+  }
+
+  Future<void> _loadUser() async {
+    final user = await AuthService.getStoredUser();
+    if (mounted) setState(() => _user = user);
+  }
+
+  Future<void> _confirmLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text('You can log back in any time with your email and password.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.alert),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await AuthService.logout();
+      widget.onLogout();
+    }
   }
 
   Future<void> _loadData() async {
@@ -135,12 +215,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AgriSense AI'),
+        title: Text(_user != null && _user!.name.isNotEmpty ? 'Hi, ${_user!.name.split(' ').first}' : 'AgriSense AI'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _loadData,
             tooltip: 'Refresh',
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout_rounded),
+            onPressed: _confirmLogout,
+            tooltip: 'Log out',
           ),
           const SizedBox(width: 8),
         ],
