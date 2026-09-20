@@ -11,13 +11,19 @@ Then open: http://localhost:8000/docs
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 
 from agri_logic import generate_advisory
 from diagnosis import diagnose_image
+from auth import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    get_current_user_email,
+)
 
 # -----------------------------
 # 1. Database setup (SQLite - zero config, just a local file)
@@ -75,6 +81,40 @@ class DiagnosisOut(SQLModel):
     advice: str
 
 
+class User(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    email: str = Field(index=True, unique=True)
+    hashed_password: str
+    district: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class UserCreate(SQLModel):
+    name: str
+    email: str
+    password: str
+    district: Optional[str] = None
+
+
+class UserLogin(SQLModel):
+    email: str
+    password: str
+
+
+class UserOut(SQLModel):
+    id: int
+    name: str
+    email: str
+    district: Optional[str] = None
+
+
+class Token(SQLModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
 
@@ -96,7 +136,52 @@ def on_startup():
 
 
 # -----------------------------
-# 3. Endpoints
+# 3. Auth endpoints (account creation & login)
+# -----------------------------
+
+@app.post("/api/v1/auth/register", response_model=Token, status_code=201)
+def register(payload: UserCreate):
+    with Session(engine) as session:
+        existing = session.exec(select(User).where(User.email == payload.email.lower())).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="An account with this email already exists.")
+
+        user = User(
+            name=payload.name.strip(),
+            email=payload.email.lower().strip(),
+            hashed_password=hash_password(payload.password),
+            district=payload.district,
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+    token = create_access_token(subject=user.email)
+    return Token(access_token=token, user=UserOut(id=user.id, name=user.name, email=user.email, district=user.district))
+
+
+@app.post("/api/v1/auth/login", response_model=Token)
+def login(payload: UserLogin):
+    with Session(engine) as session:
+        user = session.exec(select(User).where(User.email == payload.email.lower().strip())).first()
+        if not user or not verify_password(payload.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Incorrect email or password.")
+
+    token = create_access_token(subject=user.email)
+    return Token(access_token=token, user=UserOut(id=user.id, name=user.name, email=user.email, district=user.district))
+
+
+@app.get("/api/v1/auth/me", response_model=UserOut)
+def get_me(current_email: str = Depends(get_current_user_email)):
+    with Session(engine) as session:
+        user = session.exec(select(User).where(User.email == current_email)).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+        return UserOut(id=user.id, name=user.name, email=user.email, district=user.district)
+
+
+# -----------------------------
+# 4. Reading & advisory endpoints
 # -----------------------------
 
 @app.post("/api/v1/readings", response_model=ReadingWithAdvisory)
